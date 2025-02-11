@@ -5,94 +5,81 @@ import json
 # --------------------
 # Configuration
 # --------------------
-FOLDER_PATH = r"/path/to/your/folder"    # Folder containing .mp4 files
-OUTPUT_DIR  = os.path.join(FOLDER_PATH, "conformed")  # Output folder
+FOLDER_PATH = r"/path/to/your/folder"            # Folder containing .mp4 files
+OUTPUT_DIR  = os.path.join(FOLDER_PATH, "output")  # Where output files go
 
-# Default fallback encoders if we detect a certain codec name in the highest-res file
-CODEC_MAP = {
-    "h264": "libx264",
-    "hevc": "libx265",
-    "vp9":  "libvpx-vp9",
-    # Add more if needed
-}
+# Video encoder settings for non-matching resolutions
+VIDEO_CODEC = "libx264"
+CRF_VALUE   = 18       # Lower = higher quality (bigger file). Common range: 18-23
+PRESET      = "medium" # Speed/efficiency trade-off: ultrafast, superfast, veryfast, faster, fast, medium, slow, etc.
 
-# If the detected codec isn’t in CODEC_MAP, we’ll use this fallback
-DEFAULT_VIDEO_ENCODER = "libx264"
-
-# For video re-encoding quality
-CRF_VALUE   = 18       # Lower = higher quality (larger file). Common range is 18–23 for x264/x265
-PRESET      = "medium" # FFmpeg presets: ultrafast, superfast, veryfast, faster, fast, medium, slow, etc.
-
-# Audio: either copy original or re-encode
-AUDIO_CODEC = "copy"   # or "aac", "libopus", etc.
+# Audio: either copy or re-encode
+AUDIO_CODEC = "copy"   # e.g., "aac" if you want to re-encode to AAC
 
 def main():
-    # 1. Gather MP4 files
+    # 1. Gather all MP4 files
     mp4_files = [f for f in os.listdir(FOLDER_PATH) if f.lower().endswith(".mp4")]
     if not mp4_files:
         print(f"No MP4 files found in {FOLDER_PATH}")
         return
 
-    # 2. Find the file with highest resolution
+    # 2. Find the file with the highest resolution
     max_pixels = 0
-    max_res_file = None
     max_width, max_height = 0, 0
+    max_res_file = None
 
     for filename in mp4_files:
         full_path = os.path.join(FOLDER_PATH, filename)
         w, h = get_video_resolution(full_path)
         if w * h > max_pixels:
             max_pixels = w * h
-            max_res_file = filename
             max_width, max_height = w, h
+            max_res_file = filename
 
     if not max_res_file:
         print("Could not determine a file with the highest resolution.")
         return
 
-    # 3. Detect the highest-res file’s video codec name
-    highest_codec = detect_video_codec(os.path.join(FOLDER_PATH, max_res_file))
-    print(f"Highest resolution file: {max_res_file} ({max_width}x{max_height} => {max_pixels} px)")
-    print(f"Detected codec: {highest_codec}")
+    print(f"Highest resolution: {max_width}x{max_height} ({max_pixels} pixels) from file: {max_res_file}")
 
-    # Map the detected codec to an FFmpeg encoder, or use default
-    video_encoder = CODEC_MAP.get(highest_codec, DEFAULT_VIDEO_ENCODER)
-    print(f"Using video encoder: {video_encoder}")
-
-    # 4. Make output directory
+    # 3. Create output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 5. Re-encode each file to match resolution and (roughly) the same codec family
+    # 4. Process each file
     for filename in mp4_files:
         full_path = os.path.join(FOLDER_PATH, filename)
         output_path = os.path.join(OUTPUT_DIR, filename)
 
-        # Skip re-encoding for the max file if you wish
-        if filename == max_res_file:
-            print(f"Skipping re-encoding of {filename} (already highest resolution).")
-            # Either copy the file directly to OUTPUT_DIR or do nothing:
-            # shutil.copy2(full_path, output_path)
-            continue
+        w, h = get_video_resolution(full_path)
 
-        print(f"Re-encoding {filename} to {max_width}x{max_height} using {video_encoder}...")
+        # If this file already matches the highest resolution, do pass-through copy
+        if w == max_width and h == max_height:
+            print(f"File {filename} matches the highest resolution ({w}x{h}). Doing pass-through copy.")
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", full_path,
+                "-c", "copy",  # Copy video and audio without re-encoding
+                output_path
+            ]
+            subprocess.run(cmd)
+        else:
+            # Otherwise, scale it to the highest resolution
+            print(f"Scaling {filename} from {w}x{h} to {max_width}x{max_height} ...")
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", full_path,
+                "-vf", f"scale={max_width}:{max_height}",
+                "-c:v", VIDEO_CODEC,
+                "-preset", PRESET,
+                "-crf", str(CRF_VALUE),
+                "-c:a", AUDIO_CODEC,
+                output_path
+            ]
+            subprocess.run(cmd)
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-i", full_path,
-            # Scale filter
-            "-vf", f"scale={max_width}:{max_height}",
-            # Video encoding
-            "-c:v", video_encoder,
-            "-preset", PRESET,
-            "-crf", str(CRF_VALUE),
-            # Audio settings
-            "-c:a", AUDIO_CODEC,
-            output_path
-        ]
-        subprocess.run(cmd)
-
-    print("Done! Check the 'conformed' folder for results.")
+    print("Done! Check the output folder for conformed files.")
 
 def get_video_resolution(file_path):
     """Return (width, height) of the first video stream using ffprobe JSON."""
@@ -106,33 +93,17 @@ def get_video_resolution(file_path):
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        return (0, 0)
-    try:
-        data = json.loads(result.stdout)
-        width  = data["streams"][0]["width"]
-        height = data["streams"][0]["height"]
-        return (int(width), int(height))
-    except:
+        print(f"FFprobe error on {file_path}: {result.stderr}")
         return (0, 0)
 
-def detect_video_codec(file_path):
-    """Return the codec_name (e.g. 'h264', 'hevc', 'mpeg4', 'vp9') of the first video stream."""
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name",
-        "-of", "json",
-        file_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        return None
     try:
         data = json.loads(result.stdout)
-        return data["streams"][0]["codec_name"]
-    except:
-        return None
+        width = data["streams"][0]["width"]
+        height = data["streams"][0]["height"]
+        return (int(width), int(height))
+    except Exception as e:
+        print(f"Error parsing resolution for {file_path}: {e}")
+        return (0, 0)
 
 if __name__ == "__main__":
     main()
