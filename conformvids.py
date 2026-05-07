@@ -2,28 +2,28 @@ import os
 import subprocess
 import json
 
-# --------------------
+
 # Configuration
-# --------------------
+
 FOLDER_PATH = r"/path/to/your/folder"            # Folder containing .mp4 files
 OUTPUT_DIR  = os.path.join(FOLDER_PATH, "output")  # Where output files go
 
-# --------------------
+
 # GPU Settings
-# --------------------
+
 USE_GPU = True               # Set to True to use GPU if available, False to use CPU
 GPU_ENCODER = "h264_nvenc"   # Example for NVIDIA. Could be "hevc_nvenc", "h264_qsv" (Intel), "h264_amf" (AMD), etc.
 
-# --------------------
+
 # CPU (libx264) Settings
-# --------------------
+
 VIDEO_CODEC = "libx264"
 CRF_VALUE   = 18       # Lower = higher quality. Typically 18-23 for H.264
 PRESET      = "medium" # ultrafast, superfast, veryfast, faster, fast, medium, slow, etc.
 
-# --------------------
+
 # Audio Settings
-# --------------------
+
 AUDIO_CODEC = "copy"   # "copy" keeps original audio. Or use "aac", "ac3", etc.
 
 def main():
